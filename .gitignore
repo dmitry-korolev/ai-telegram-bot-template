@@ -1,0 +1,15 @@
+node_modules/
+node_modules.corrupt*/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+npm-debug.log*
+*.log
+log.txt

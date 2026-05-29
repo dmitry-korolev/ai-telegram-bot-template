@@ -1,0 +1,5 @@
+{
+  "start": "Hi. Send me a message and I will route it through the default AI agent.",
+  "help": "Available commands: /start, /help. Add new bot features under src/bot/features.",
+  "error": "Sorry, something went wrong. Please try again later."
+}

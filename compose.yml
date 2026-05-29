@@ -1,0 +1,13 @@
+services:
+  bot:
+    build:
+      context: .
+    env_file:
+      - .env
+    volumes:
+      - bot-data:/app/data
+    ports:
+      - "${HEALTH_PORT:-3000}:3000"
+
+volumes:
+  bot-data:

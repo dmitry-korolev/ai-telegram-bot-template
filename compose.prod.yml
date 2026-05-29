@@ -1,0 +1,6 @@
+services:
+  bot:
+    restart: unless-stopped
+    command: node dist/main.js
+    environment:
+      NODE_ENV: production
