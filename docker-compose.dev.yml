@@ -8,10 +8,12 @@ services:
     env_file:
       - path: .env
         required: false
+      - path: .env.development
+        required: false
     environment:
       NODE_ENV: development
+      ENV_FILE: .env.development
       HEALTH_HOST: 0.0.0.0
-    network_mode: "container:sing-box"
     volumes:
       - .:/workspace
       - dev-node-modules:/workspace/node_modules

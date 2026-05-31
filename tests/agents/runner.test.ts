@@ -27,4 +27,56 @@ describe("createAgentRunner", () => {
       }),
     );
   });
+
+  it("executes tool calls and sends tool results back to the LLM", async () => {
+    const generateText = vi.fn()
+      .mockResolvedValueOnce({
+        text: "",
+        providerId: "test",
+        model: "model",
+        toolCalls: [{ id: "call-1", name: "lookup", arguments: JSON.stringify({ query: "hello" }) }],
+      })
+      .mockResolvedValueOnce({ text: "final", providerId: "test", model: "model" });
+    const llm: LlmClient = { generateText };
+    const toolExecute = vi.fn().mockResolvedValue({ ok: true, content: "tool answer" });
+
+    const runner = createAgentRunner(llm);
+    const result = await runner.runAgentWithTools("chat", { text: "Hello" }, undefined, {
+      runtimeContext: { chatId: 1 },
+      tools: [{
+        name: "lookup",
+        parameters: { type: "object" },
+        execute: toolExecute,
+      }],
+    });
+
+    expect(result.text).toBe("final");
+    expect(toolExecute).toHaveBeenCalledWith({ query: "hello" }, { chatId: 1 });
+    expect(generateText).toHaveBeenLastCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", toolCalls: expect.any(Array) }),
+        expect.objectContaining({ role: "tool", toolCallId: "call-1" }),
+      ]),
+    }));
+  });
+
+  it("returns a controlled response when the tool loop limit is reached", async () => {
+    const llm: LlmClient = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "",
+        providerId: "test",
+        model: "model",
+        toolCalls: [{ id: "call-1", name: "lookup", arguments: "{}" }],
+      }),
+    };
+
+    const runner = createAgentRunner(llm);
+    const result = await runner.runAgentWithTools("chat", { text: "Hello" }, undefined, {
+      runtimeContext: {},
+      maxToolIterations: 1,
+      tools: [{ name: "lookup", parameters: { type: "object" }, execute: vi.fn().mockResolvedValue({ ok: true, content: "x" }) }],
+    });
+
+    expect(result.text).toBe("Tool iteration limit reached before a final response.");
+  });
 });

@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleTextMessage } from "../../src/bot/handlers/messages.js";
 
+function baseDeps(overrides: Record<string, unknown> = {}) {
+  return {
+    config: { botAllowedChats: [] },
+    logger: { info: vi.fn() },
+    ...overrides,
+  };
+}
+
 describe("handleTextMessage", () => {
   it("routes text messages through the agent layer", async () => {
     const insertValues = vi.fn().mockResolvedValue(undefined);
@@ -14,12 +22,12 @@ describe("handleTextMessage", () => {
       message: { text: "hello" },
       from: { id: 10, username: "alice" },
       chat: { id: 20 },
-      deps: {
+      deps: baseDeps({
         agents: { runAgent },
         db: {
           insert: vi.fn(() => ({ values: insertValues })),
         },
-      },
+      }),
       replyWithChatAction: vi.fn().mockResolvedValue(undefined),
       reply: vi.fn().mockResolvedValue(undefined),
     };
@@ -39,5 +47,28 @@ describe("handleTextMessage", () => {
       model: "test-model",
     }));
     expect(ctx.reply).toHaveBeenCalledWith("agent reply");
+  });
+
+  it("ignores disallowed chats without persistence or agent calls", async () => {
+    const runAgent = vi.fn();
+    const insert = vi.fn();
+    const ctx = {
+      message: { text: "hello" },
+      from: { id: 10, username: "alice" },
+      chat: { id: 999 },
+      deps: baseDeps({
+        config: { botAllowedChats: [20] },
+        agents: { runAgent },
+        db: { insert },
+      }),
+      replyWithChatAction: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    await handleTextMessage(ctx as any);
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    expect(ctx.reply).not.toHaveBeenCalled();
   });
 });

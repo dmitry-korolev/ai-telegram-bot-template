@@ -1,9 +1,18 @@
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 
-import type { AppConfig } from "../config/env.js";
+import type { AppConfig, LlmProviderConfig } from "../config/env.js";
+import { serializeError } from "../shared/errors.js";
+import { inferImageMimeType } from "./images.js";
 import { selectModel } from "./model-router.js";
-import type { GenerateTextInput, GenerateTextResult, LlmClient } from "./types.js";
+import type {
+  GenerateImageDescriptionInput,
+  GenerateImageDescriptionResult,
+  GenerateTextInput,
+  GenerateTextResult,
+  LlmClient,
+  LlmMessage,
+} from "./types.js";
 
 interface OpenAiLike {
   chat: {
@@ -13,10 +22,18 @@ interface OpenAiLike {
         messages: ChatCompletionMessageParam[];
         temperature: number;
         max_tokens?: number;
+        tools?: ChatCompletionTool[];
       }) => Promise<{
         choices: Array<{
           message: {
             content: string | null;
+            tool_calls?: Array<{
+              id: string;
+              function: {
+                name: string;
+                arguments: string;
+              };
+            }>;
           };
         }>;
       }>;
@@ -24,10 +41,18 @@ interface OpenAiLike {
   };
 }
 
+interface ClientFactoryInput {
+  apiKey: string;
+  baseURL: string;
+  headers?: Record<string, string>;
+  apiKeyHeader?: string;
+  modelUriTemplate?: string;
+}
+
 export interface OpenAiCompatibleClientOptions {
-  config: Pick<AppConfig, "llmDefaultProvider" | "llmProviders">;
+  config: Pick<AppConfig, "llmDefaultProvider" | "llmProviders"> & Partial<Pick<AppConfig, "visionMaxBytes">>;
   env?: NodeJS.ProcessEnv;
-  clientFactory?: (provider: { apiKey: string; baseURL: string; headers?: Record<string, string> }) => OpenAiLike;
+  clientFactory?: (provider: ClientFactoryInput) => OpenAiLike;
 }
 
 export class OpenAiCompatibleLlmClient implements LlmClient {
@@ -43,16 +68,81 @@ export class OpenAiCompatibleLlmClient implements LlmClient {
     const client = this.clientFor(selection.providerId);
     const response = await client.chat.completions.create({
       model: selection.model,
-      messages: input.messages as ChatCompletionMessageParam[],
+      messages: toOpenAiMessages(input.messages),
       temperature: input.temperature ?? 0.2,
       max_tokens: input.maxTokens,
+      tools: input.tools as ChatCompletionTool[] | undefined,
     });
 
+    const message = response.choices[0]?.message;
+    const toolCalls = message?.tool_calls?.map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.function.name,
+      arguments: toolCall.function.arguments,
+    }));
+
     return {
-      text: response.choices[0]?.message.content ?? "",
+      text: message?.content ?? "",
       providerId: selection.providerId,
       model: selection.model,
+      toolCalls: toolCalls?.length ? toolCalls : undefined,
     };
+  }
+
+  public async generateImageDescription(
+    input: GenerateImageDescriptionInput,
+  ): Promise<GenerateImageDescriptionResult> {
+    const selection = selectModel(this.options.config, input.task ?? "vision");
+    const imageBytes = input.image.byteLength;
+    const maxBytes = input.maxBytes ?? this.options.config.visionMaxBytes ?? 4_194_304;
+    const mimeType = input.mimeType ?? inferImageMimeType(input.image);
+    const base64 = Buffer.from(input.image).toString("base64");
+    const resultBase = {
+      providerId: selection.providerId,
+      model: selection.model,
+      mimeType,
+      imageBytes,
+      base64Length: base64.length,
+    };
+
+    if (imageBytes > maxBytes) {
+      return {
+        ...resultBase,
+        text: "",
+        error: { name: "ImageTooLargeError", message: `Image is ${imageBytes} bytes, max is ${maxBytes}` },
+      };
+    }
+
+    try {
+      const client = this.clientFor(selection.providerId);
+      const response = await client.chat.completions.create({
+        model: selection.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: input.prompt ?? "Describe this image briefly and factually." },
+              {
+                type: "image_url",
+                image_url: { url: `data:${mimeType};base64,${base64}` },
+              },
+            ],
+          } as ChatCompletionMessageParam,
+        ],
+        temperature: 0.2,
+      });
+
+      return {
+        ...resultBase,
+        text: response.choices[0]?.message.content ?? "",
+      };
+    } catch (error) {
+      return {
+        ...resultBase,
+        text: "",
+        error: serializeError(error),
+      };
+    }
   }
 
   private clientFor(providerId: string): OpenAiLike {
@@ -71,17 +161,87 @@ export class OpenAiCompatibleLlmClient implements LlmClient {
       throw new Error(`Missing API key env variable "${provider.apiKeyEnv}" for provider "${providerId}"`);
     }
 
-    const client =
-      this.options.clientFactory?.({ apiKey, baseURL: provider.baseURL, headers: provider.headers }) ??
-      new OpenAI({
+    const headers = this.headersFor(provider, apiKey);
+    const factoryInput = {
+      apiKey,
+      baseURL: provider.baseURL,
+      headers,
+      apiKeyHeader: provider.apiKeyHeader,
+      modelUriTemplate: provider.modelUriTemplate,
+    };
+    const client: OpenAiLike =
+      this.options.clientFactory?.(factoryInput) ??
+      (new OpenAI({
         apiKey,
         baseURL: provider.baseURL,
-        defaultHeaders: provider.headers,
-      });
+        defaultHeaders: headers,
+      }) as unknown as OpenAiLike);
     this.clients.set(providerId, client);
 
     return client;
   }
+
+  private headersFor(provider: LlmProviderConfig, apiKey: string): Record<string, string> | undefined {
+    const headers = {
+      ...(provider.headers ?? {}),
+      ...this.headersFromEnv(provider),
+    };
+
+    if (provider.apiKeyHeader) {
+      headers[provider.apiKeyHeader] = apiKey;
+    }
+
+    return Object.keys(headers).length ? headers : undefined;
+  }
+
+  private headersFromEnv(provider: LlmProviderConfig): Record<string, string> {
+    if (!provider.headersEnv) {
+      return {};
+    }
+
+    const raw = this.env[provider.headersEnv];
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${provider.headersEnv} must be a JSON object`);
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).map(([key, value]) => [key, String(value)]),
+    );
+  }
+}
+
+function toOpenAiMessages(messages: LlmMessage[]): ChatCompletionMessageParam[] {
+  return messages.map((message) => {
+    if (message.role === "assistant") {
+      return {
+        role: "assistant",
+        content: message.content ?? null,
+        tool_calls: message.toolCalls?.map((toolCall) => ({
+          id: toolCall.id,
+          type: "function",
+          function: {
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          },
+        })),
+      } as ChatCompletionMessageParam;
+    }
+
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        content: message.content,
+        tool_call_id: message.toolCallId,
+      } as ChatCompletionMessageParam;
+    }
+
+    return message as ChatCompletionMessageParam;
+  });
 }
 
 export function createLlmClient(options: OpenAiCompatibleClientOptions): LlmClient {

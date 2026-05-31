@@ -32,12 +32,22 @@ npm run db:migrate
 
 - Telegram handlers live under `src/bot`.
 - Handlers must not instantiate OpenAI clients or call providers directly.
-- Use `ctx.deps.agents.runAgent(task, input, context)` for AI work.
+- Use `ctx.deps.agents.runAgent(task, input, context)` or `runAgentWithTools` for AI work.
+- Tool execution belongs in the feature layer, where trusted runtime context is available.
 - Provider-specific behavior belongs in `src/llm`.
 - Agent definitions and prompts belong in `src/agents`.
 - Persistent schema changes belong in `src/db/schema.ts` and must include a migration.
 - Keep config in `src/config/env.ts`; do not read `process.env` throughout the codebase.
 - Use `ctx.deps.logger`; do not use `console` in application code except process-level fatal startup handling.
+- Never log bot tokens, API keys, full image payloads or raw provider credentials.
+
+## Environment Rules
+
+- `.env` is the shared base file.
+- `ENV_FILE` selects the overlay, such as `.env.development` or `.env.production`.
+- Runtime precedence is `.env` -> selected `ENV_FILE` -> exported process environment.
+- Keep real secrets out of git; commit only `*.example` env files.
+- Keep development and production bot tokens and allowed chat ids separate.
 
 ## Adding a Handler
 
@@ -53,9 +63,17 @@ npm run db:migrate
 3. Keep prompts concise and task-specific.
 4. Add or update tests for message construction and routing.
 
+## Adding Tools or Vision
+
+- Model side effects as tools, not structured-output fields.
+- Tools must accept only minimal model-controlled arguments.
+- Trusted identifiers like `chatId`, `messageId` and local history scope must come from runtime context.
+- Return controlled tool results for invalid arguments and external API failures.
+- Vision support is optional through `generateImageDescription`; enforce byte limits and never log base64 image data.
+
 ## Adding an LLM Provider
 
-Do not add provider-specific code unless the provider is not OpenAI-compatible. Prefer env configuration:
+Prefer `config/llm-providers.json` for provider URLs, model routing, headers and provider options. Keep API keys in env and reference them with `apiKeyEnv`.
 
 ```json
 {
@@ -71,6 +89,8 @@ Do not add provider-specific code unless the provider is not OpenAI-compatible. 
 }
 ```
 
+`LLM_PROVIDERS_JSON` remains a compatibility fallback when no `LLM_PROVIDERS_FILE` is configured.
+
 ## Testing Rules
 
 - Tests must not require a real Telegram token.
@@ -85,10 +105,10 @@ Do not add provider-specific code unless the provider is not OpenAI-compatible. 
 - The devcontainer is started by Docker Compose from the host; nested Docker is not required inside the devcontainer.
 - Do not expect `docker` or `docker compose` to be available inside the devcontainer unless the user has explicitly mounted the host Docker socket or installed the CLI.
 - `docker compose config`, image builds and compose up/down checks should normally be run from the host shell. If an agent cannot access host Docker, report that limitation instead of working around it.
-- The devcontainer uses `network_mode: "container:sing-box"`; network-dependent commands may depend on that external container being started by the user.
+- Project-specific networking such as `network_mode: "container:sing-box"` must stay optional via override files, not default template behavior.
 
 ## Docker Rules
 
 - Polling is the default Telegram delivery mode.
 - `/healthz` is for container health only; it is not a webhook endpoint.
-- Keep runtime images production-focused: compiled JS, production dependencies, non-root user.
+- Keep runtime images production-focused: compiled JS, production dependencies, non-root user, runtime migrations and runtime config files.

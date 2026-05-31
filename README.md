@@ -19,11 +19,12 @@ Use GitHub's **Use this template** button to create a fresh repository for your 
 After creating the new repository:
 
 1. Rename the `name` field in `package.json`.
-2. Copy `.env.example` to `.env` and fill in real secrets.
-3. Adjust agents, prompts and bot features for your project.
-4. Run `npm install`, or let the dev container run its `postCreateCommand`.
-5. Run `npm run db:migrate`.
-6. Run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`.
+2. Copy `.env.example` to `.env` and copy the profile example you need, such as `.env.development.example` to `.env.development`.
+3. Fill real secrets only in untracked env files.
+4. Adjust agents, prompts and bot features for your project.
+5. Run `npm install`, or let the dev container run its `postCreateCommand`.
+6. Run `npm run db:migrate`.
+7. Run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`.
 
 Docker and Docker Compose checks normally run from the host. Inside the dev container, it is expected that the `docker` CLI may be unavailable.
 
@@ -32,38 +33,75 @@ Docker and Docker Compose checks normally run from the host. Inside the dev cont
 ```bash
 npm install
 cp .env.example .env
+cp .env.development.example .env.development
 npm run db:migrate
 npm run dev
 ```
 
-Set at least:
+Set at least these values in `.env.development`:
 
 ```env
 BOT_TOKEN=123456:your-telegram-token
-LLM_DEFAULT_PROVIDER=openai
 OPENAI_API_KEY=your-key
-LLM_PROVIDERS_JSON={"openai":{"baseURL":"https://api.openai.com/v1","apiKeyEnv":"OPENAI_API_KEY","models":{"default":"gpt-4.1-mini","chat":"gpt-4.1-mini","intent":"gpt-4.1-mini","summary":"gpt-4.1-mini","tool":"gpt-4.1"}}}
+BOT_ADMINS=[]
+BOT_ALLOWED_CHATS=[]
 ```
 
-Any OpenAI-compatible provider can be used by changing `baseURL`, `apiKeyEnv` and model names.
+The template loads env values in this order:
+
+```text
+.env -> ENV_FILE overlay -> exported process environment
+```
+
+`ENV_FILE` defaults to `.env.development` in `.env.example`. Production compose sets it to `.env.production`.
+
+## LLM Providers
+
+Provider routing lives in `config/llm-providers.json`. API keys stay in env and are referenced by each provider's `apiKeyEnv`.
+
+```json
+{
+  "openrouter": {
+    "baseURL": "https://openrouter.ai/api/v1",
+    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "headers": {
+      "HTTP-Referer": "https://example.com"
+    },
+    "models": {
+      "default": "openai/gpt-4.1-mini",
+      "chat": "openai/gpt-4.1-mini",
+      "tool": "openai/gpt-4.1"
+    }
+  }
+}
+```
+
+Optional provider fields:
+
+- `headersEnv`: env var containing JSON headers to merge at runtime.
+- `apiKeyHeader`: custom header name for providers that do not use `Authorization`.
+- `modelUriTemplate`: metadata for providers that need model-specific URL routing in a custom adapter.
+
+`LLM_PROVIDERS_JSON` is still supported as a compatibility fallback when `LLM_PROVIDERS_FILE` is not set.
 
 ## Project Layout
 
 ```text
 src/
-  agents/      Lightweight task router and agent registry.
-  bot/         grammY bot setup, features, handlers, middleware, filters, keyboards.
-  config/      Typed environment parsing.
+  agents/      Lightweight task router, tool loop and agent registry.
+  bot/         grammY bot setup, features, handlers, middleware, filters, tools, keyboards.
+  config/      Typed environment parsing and safe config facts.
   db/          SQLite connection, Drizzle schema and migrations runner.
-  llm/         OpenAI-compatible provider adapter and model selection.
+  llm/         OpenAI-compatible provider adapter, model selection and optional vision support.
   server/      Minimal health server.
-  shared/      Logger and common utilities.
+  shared/      Logger, error serialization and common utilities.
+config/        Runtime provider configuration files.
 tests/         Vitest tests.
 drizzle/       SQL migrations.
 locales/       i18n-ready message files.
 ```
 
-## LLM Routing
+## Agents, Tools And Vision
 
 Handlers must call the agent layer, not provider clients directly:
 
@@ -71,14 +109,11 @@ Handlers must call the agent layer, not provider clients directly:
 await ctx.deps.agents.runAgent("chat", { text }, { userId, chatId });
 ```
 
-Tasks supported by the template:
+Use `runAgentWithTools` when a feature needs model-selected side effects. Tools execute in the feature layer and receive trusted runtime context separately from model-controlled arguments.
 
-- `chat`
-- `intent`
-- `summary`
-- `tool`
+The template includes an example Telegram reaction tool. It uses trusted runtime `chatId` and `messageId`, validates supported emoji and returns controlled tool results.
 
-Each provider can map those tasks to different models. If a task-specific model is missing, the router falls back to `models.default`.
+Vision is optional through `llm.generateImageDescription`. It supports provider/model routing, inline image byte limits, MIME inference and non-fatal failure results.
 
 ## Adding a New Agent
 
@@ -93,7 +128,7 @@ registerAgent({
 });
 ```
 
-Then call it from a handler or service through `runAgent`.
+Then call it from a handler or service through `runAgent` or `runAgentWithTools`.
 
 ## Database
 
@@ -114,6 +149,8 @@ Generate a new migration after editing `src/db/schema.ts`:
 ```bash
 npm run db:generate
 ```
+
+User and chat persistence is upsert-like so duplicate or reordered updates do not fail. If `BOT_ALLOWED_CHATS` is set, disallowed chats are ignored and not persisted.
 
 ## Tests and Checks
 
@@ -137,6 +174,7 @@ docker compose up --build
 Production-style run:
 
 ```bash
+cp .env.production.example .env.production
 docker compose -f compose.yml -f compose.prod.yml up --build -d
 ```
 
@@ -146,17 +184,17 @@ The bot uses Telegram long polling by default. The health server is only for con
 curl http://localhost:3000/healthz
 ```
 
-SQLite data is stored in the `bot-data` volume mounted at `/app/data`.
+SQLite data is stored in the `bot-data` volume mounted at `/app/data`. Run `docker compose config` from the host shell when Docker CLI is available.
 
 ## Dev Container
 
-The VS Code dev container uses `Dockerfile.dev` and `docker-compose.dev.yml`. It routes network traffic through an existing container named `sing-box`:
+The VS Code dev container uses `Dockerfile.dev` and `docker-compose.dev.yml`. It mounts the repository at `/workspace`, keeps dependencies in a Docker volume at `/workspace/node_modules`, and runs `npm ci` after creation.
 
-```yaml
-network_mode: "container:sing-box"
+If your environment needs to share networking with an existing `sing-box` container, use the optional override example from the host:
+
+```bash
+docker compose -f docker-compose.dev.yml -f docker-compose.sing-box.example.yml up -d
 ```
-
-Start `sing-box` before opening the project in the dev container. The dev container mounts the repository at `/workspace`, keeps dependencies in a Docker volume at `/workspace/node_modules`, and runs `npm ci` after creation.
 
 ## Adding Bot Features
 
@@ -166,5 +204,5 @@ Recommended flow:
 
 1. Add handler or middleware.
 2. Add tests with mocked Telegram context.
-3. If LLM is needed, call `ctx.deps.agents.runAgent`.
+3. If LLM is needed, call `ctx.deps.agents.runAgent` or `runAgentWithTools`.
 4. Run typecheck, lint and tests.

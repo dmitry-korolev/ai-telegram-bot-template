@@ -2,13 +2,14 @@ import process from "node:process";
 import { run, type RunnerHandle } from "@grammyjs/runner";
 
 import { createApp } from "./app.js";
-import { loadConfig } from "./config/env.js";
+import { loadConfig, safeConfigFacts } from "./config/env.js";
 import { runMigrations } from "./db/migrations.js";
 import { startHealthServer, type HealthServerHandle } from "./server/health.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const app = createApp(config);
+  app.logger.info(safeConfigFacts(config), "Configuration loaded");
   const handles: {
     runner?: RunnerHandle;
     health?: HealthServerHandle;

@@ -5,6 +5,7 @@ RUN npm ci
 
 FROM deps AS build
 COPY tsconfig.json eslint.config.js drizzle.config.ts ./
+COPY config ./config
 COPY src ./src
 COPY tests ./tests
 COPY drizzle ./drizzle
@@ -22,6 +23,7 @@ RUN groupadd --system bot && useradd --system --gid bot --home /app bot
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY drizzle ./drizzle
+COPY config ./config
 COPY package.json ./
 RUN mkdir -p /app/data && chown -R bot:bot /app
 USER bot

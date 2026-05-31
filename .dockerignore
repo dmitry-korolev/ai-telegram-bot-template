@@ -5,6 +5,8 @@ coverage
 .env
 .env.*
 !.env.example
+!.env.development.example
+!.env.production.example
 data
 npm-debug.log*
 README.md

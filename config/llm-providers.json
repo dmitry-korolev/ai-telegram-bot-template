@@ -1,0 +1,14 @@
+{
+  "openai": {
+    "baseURL": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "models": {
+      "default": "gpt-4.1-mini",
+      "chat": "gpt-4.1-mini",
+      "intent": "gpt-4.1-mini",
+      "summary": "gpt-4.1-mini",
+      "tool": "gpt-4.1",
+      "vision": "gpt-4.1-mini"
+    }
+  }
+}

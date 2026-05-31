@@ -1,9 +1,9 @@
-import type { AgentTask, AppConfig } from "../config/env.js";
+import type { AppConfig, ModelTask } from "../config/env.js";
 import type { ModelSelection } from "./types.js";
 
 export function selectModel(
   config: Pick<AppConfig, "llmDefaultProvider" | "llmProviders">,
-  task: AgentTask,
+  task: ModelTask,
   providerOverride?: string,
 ): ModelSelection {
   const providerId = providerOverride ?? config.llmDefaultProvider;

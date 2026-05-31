@@ -2,5 +2,11 @@ services:
   bot:
     restart: unless-stopped
     command: node dist/main.js
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.production
+        required: false
     environment:
       NODE_ENV: production
+      ENV_FILE: .env.production
